@@ -1,0 +1,6 @@
+pandas==3.0.2
+scikit-learn==1.8.0
+xgboost==3.4.1
+joblib==1.5.3
+mlflow==3.16.1
+huggingface_hub==2.0.0

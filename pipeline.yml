@@ -1,0 +1,116 @@
+name: Tourism Project Pipeline
+
+on:
+  push:
+    branches:
+      - main  # Automatically triggers on push to the main branch
+  workflow_dispatch: {}  # Also allow manually triggering a run from the Actions tab
+
+env:
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  HF_USERNAME: ${{ vars.HF_USERNAME }}
+
+jobs:
+
+  register-dataset:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Dependencies
+        run: pip install -r tourism_project/model_building/requirements.txt
+
+      - name: Register dataset to Hugging Face Hub
+        run: python tourism_project/model_building/data_registration.py
+
+  data-preparation:
+    needs: register-dataset
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Dependencies
+        run: pip install -r tourism_project/model_building/requirements.txt
+
+      - name: Clean data and create train/test splits
+        run: python tourism_project/model_building/data_prep.py
+
+  model-training:
+    needs: data-preparation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Dependencies
+        run: pip install -r tourism_project/model_building/requirements.txt
+
+      - name: Re-create train/test splits
+        # Each job runs on a fresh runner, so we regenerate the splits here
+        # rather than trying to pass large files between jobs.
+        run: python tourism_project/model_building/data_prep.py
+
+      - name: Train candidate models with MLflow tracking and register the best one
+        run: python tourism_project/model_building/train.py
+
+      - name: Upload trained model artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: best-model
+          path: tourism_project/model_building/best_model.joblib
+
+  deploy-hosting:
+    needs: model-training
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Hugging Face Hub client
+        run: pip install huggingface_hub==2.0.0
+
+      - name: Push Streamlit app to Hugging Face Spaces
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi, create_repo
+
+          token = os.environ["HF_TOKEN"]
+          username = os.environ["HF_USERNAME"]
+          space_id = f"{username}/tourism-wellness-package-app"
+
+          create_repo(
+              repo_id=space_id,
+              repo_type="space",
+              space_sdk="docker",
+              token=token,
+              exist_ok=True,
+              private=False,
+          )
+
+          api = HfApi(token=token)
+          api.upload_folder(
+              folder_path="tourism_project/deployment",
+              repo_id=space_id,
+              repo_type="space",
+          )
+          print(f"Deployed to: https://huggingface.co/spaces/{space_id}")
+          PY
